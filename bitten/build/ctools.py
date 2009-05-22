@@ -283,9 +283,9 @@ def cunit (ctxt, file_=None, srcdir=None):
         print e
         log.warning('Error parsing CUnit results file (%s)', e)
 
-def gcov(ctxt, include=None, exclude=None, prefix=None, root=""):
+def gcov(ctxt, include=None, exclude=None, prefix=None, root="", dir_=None):
     """Run ``gcov`` to extract coverage data where available.
-    
+
     :param ctxt: the build context
     :type ctxt: `Context`
     :param include: patterns of files and directories to include
@@ -294,12 +294,32 @@ def gcov(ctxt, include=None, exclude=None, prefix=None, root=""):
                    build system
     :param root: optional root path in which the build system puts the object
                  files
+    :param dir_: optional base dir path, usefull when you have source in a
+                 subdirectory of your repository
     """
     file_re = re.compile(r'^File (?:\'|\`)(?P<file>[^\']+)\'\s*$')
     lines_re = re.compile(r'^Lines executed:(?P<cov>\d+\.\d+)\% of (?P<num>\d+)\s*$')
 
+    # basedir will be a path relative to the context
+    # resolve will be a function for resolving file's paths
+    if dir_:
+        # The base dir should finish in /
+        # this is used to create the path of the files
+        basedir = dir_
+        if basedir.rfind('/') != len(basedir) - 1:
+            basedir += '/'
+        def resolve(*args):
+            return ctxt.resolve(dir_, *args)
+    else:
+        basedir = ''
+        resolve = ctxt.resolve
+
     files = []
-    for filename in FileSet(ctxt.basedir, include, exclude):
+    if dir_ and os.path.isdir(ctxt.resolve(dir_)):
+        dir_ = ctxt.resolve(dir_)
+    else:
+        dir_ = ctxt.basedir
+    for filename in FileSet(dir_, include, exclude):
         if os.path.splitext(filename)[1] in ('.c', '.cpp', '.cc', '.cxx'):
             files.append(filename)
 
@@ -325,28 +345,30 @@ def gcov(ctxt, include=None, exclude=None, prefix=None, root=""):
             stem = prefix + '-' + stem
 
         objfile = os.path.join (root, filepath, stem + '.o')
-        if not os.path.isfile(ctxt.resolve(objfile)):
+        if not os.path.isfile(resolve(objfile)):
             warning ('No object file found for %s at %s' % (srcfile, objfile))
             continue
-        if not os.path.isfile (ctxt.resolve (os.path.join (root, filepath, stem + '.gcno'))):
+        if not os.path.isfile (resolve (os.path.join (root, filepath, stem + '.gcno'))):
             warning ('No .gcno file found for %s at %s' % (srcfile, os.path.join (root, filepath, stem + '.gcno')))
             continue
-        if not os.path.isfile (ctxt.resolve (os.path.join (root, filepath, stem + '.gcda'))):
+        if not os.path.isfile (resolve (os.path.join (root, filepath, stem + '.gcda'))):
             warning ('No .gcda file found for %s at %s' % (srcfile, os.path.join (root, filepath, stem + '.gcda')))
             continue
 
         num_lines, num_covered = 0, 0
         skip_block = False
         cmd = CommandLine('gcov', ['-b', '-n', '-o', objfile, srcfile],
-                          cwd=ctxt.basedir)
+                          cwd=dir_)
         for out, err in cmd.execute():
+            info(out)
             if out == '': # catch blank lines, reset the block state...
                 skip_block = False
             elif out and not skip_block:
                 # Check for a file name
                 match = file_re.match(out)
                 if match:
-                    if os.path.isabs(match.group('file')):
+                    # if the file is inside our ctxt.resolve(dir_)...
+                    if match.group('file').find(dir_) != 0:
                         skip_block = True
                         continue
                 else:
@@ -361,7 +383,7 @@ def gcov(ctxt, include=None, exclude=None, prefix=None, root=""):
             continue
 
         module = xmlio.Element('coverage', name=os.path.basename(srcfile),
-                                file=srcfile.replace(os.sep, '/'),
+                                file=(basedir+srcfile).replace(os.sep, '/'),
                                 lines=num_lines, percentage=0)
         if num_lines:
             percent = int(round(num_covered * 100 / num_lines))
