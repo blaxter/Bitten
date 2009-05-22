@@ -85,6 +85,8 @@ setup(
             NS + 'python#pylint = bitten.build.pythontools:pylint',
             NS + 'python#trace = bitten.build.pythontools:trace',
             NS + 'python#unittest = bitten.build.pythontools:unittest',
+            NS + 'ruby#unit = bitten.build.rubytools:unit',
+            NS + 'ruby#rcov = bitten.build.rubytools:rcov',
             NS + 'svn#checkout = bitten.build.svntools:checkout',
             NS + 'svn#export = bitten.build.svntools:export',
             NS + 'svn#update = bitten.build.svntools:update',
