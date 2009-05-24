@@ -18,32 +18,65 @@ log = logging.getLogger('bitten.build.rubytools')
 
 __docformat__ = 'restructuredtext en'
 
-def find_test_class(name):
+def find_file_inside(basedir, file):
+    """Given a filename, search inside a directory and return the relative
+    path starting in basedir.
+
+    E.g.
+      basedir is /tmp/foo, file is a/b/foo.py but directory a/ is in
+      /tmp/foo/bar, so returns bar/a/b/foo.py
+    TODO this method should be move into Context object
+    """
+    basename = os.path.basename(file)
+    file_basedir = file[0:-1-len(basename)]
+    for dir, subdirs, files in os.walk(basedir):
+        if dir.endswith(file_basedir):
+            if basename in files:
+                return os.path.join(dir[len(basedir)+1:], basename)
+    return file
+
+def find_test_class(name, is_rspec):
     """Given a class name camelized, returns it descamelized and with
     a directory prefix according to its name.
 
     :param name Camelized name of a test file
+    :param is_rspec whether is an rspec test or a Test::Unit
+    :type is_rspec: Boolean
 
     Examples:
       UserControllerTest will be functional/user_controller_test.rb
-      User will be unit/user.rb
+      if is_rspec is false
+      User will be unit/user.rb if is_rspec is false and model/user_spec.rb
+      if is_rspec is true
     """
-    class_name = ''
-    for i in range(len(name)):
-        if name[i].isupper():
-            class_name += '_'
-        class_name += name[i].lower()
-    class_name = class_name[1:]
-    ret = 'test/'
-    if class_name.find('_controller_') != -1:
-        ret += 'functional/'
-    elif class_name.find('_integration_') != -1:
-        ret += 'integration/'
+    test_filename = reduce(
+        lambda t,c: t + '_' + c if c.isupper() else t + c, name
+    ).lower()
+    test_path = []
+    if is_rspec:
+        test_path.append('spec')
+        if test_filename.find('_helper') != -1:
+            test_path.append('helpers')
+        elif test_filename.find('_controller') != -1:
+            test_path.append('controllers')
+        elif test_filename.find('_view') != -1:
+            test_path.append('views')
+        else:
+            test_path.append('models')
+        test_filename += '_spec.rb'
     else:
-        ret += 'unit/'
-    return ret + class_name + '.rb'
+        test_path.append('test')
+        if test_filename.find('_controller') != -1:
+            test_path.append('functional')
+        elif test_filename.find('_integration') != -1:
+            test_path.append('integration')
+        else:
+            test_path.append('unit')
+        test_filename += '.rb'
+    test_path.append(test_filename)
+    return reduce(os.path.join, test_path)
 
-def unit(ctxt, file_=None):
+def unit(ctxt, dir_=None):
     """Extract test results from a ci reporter report, see
     http://caldersphere.rubyforge.org/ci_reporter/
 
@@ -52,21 +85,30 @@ def unit(ctxt, file_=None):
 
     :param ctxt: the build context
     :type ctxt: `Context`
-    :param file\_: path to the XML test results; may contain globbing
-                  wildcards for matching multiple results files
+    :param dir\_: path to the directory with the XML test results
     """
-    assert file_, 'Missing required attribute "file"'
+    assert dir_, 'Missing required attribute "dir"'
     try:
         total, failed = 0, 0
         results = xmlio.Fragment()
-        for path in glob(ctxt.resolve(file_)):
+        files = glob(ctxt.resolve(os.path.join(dir_, 'SPEC-*.xml')))
+        if len(files) > 0:
+            is_rspec = True
+        else:
+            # asume Test::Unit
+            is_rspec = False
+            files = glob(ctxt.resolve(os.path.join(dir_, 'TEST-*.xml')))
+        for path in files:
             fileobj = file(path, 'r')
             try:
-                # path is /something/end/with/TEST-nameWanted.xml
-                class_name = path.split(os.sep)[-1].split('-')[-1][0:-4]
+                # path is either /something/end/with/TEST-nameWanted.xml or
+                # /something/end/with/SPEC-nameWanter-foo-bar.xml
+                test_filename = path.split(os.sep)[-1].split('-')[1]
+                if test_filename.find('.xml') != -1: test_filename = test_filename[0:-4]
 
                 # FIXME only works with Rails projects
-                filename = find_test_class(class_name)
+                filename = find_test_class(test_filename, is_rspec)
+                filename = find_file_inside(ctxt.basedir, filename)
 
                 testsuit = xmlio.parse(fileobj)
                 fetch_attr = lambda what : int(testsuit.attr[what])
@@ -76,7 +118,7 @@ def unit(ctxt, file_=None):
                 for testcase in testsuit.children('testcase'):
                     test = xmlio.Element('test')
 
-                    test.attr['fixture']  = class_name
+                    test.attr['fixture']  = test_filename
                     test.attr['name']     = testcase.attr['name']
                     test.attr['duration'] = testcase.attr['time']
 
@@ -129,10 +171,11 @@ def rcov(ctxt, file_=None):
             percentage  = float(get_value('percentage').strip('%'))
 
             module = xmlio.Element('coverage',
-                                   name       = filename,
-                                   file       = filename.replace(os.sep, '/'),
-                                   percentage = percentage,
-                                   lines      = total_lines)
+                name       = filename,
+                file       = find_file_inside(ctxt.basedir, filename.replace(os.sep, '/')),
+                percentage = percentage,
+                lines      = total_lines
+            )
             coverage.append(module)
 
         ctxt.report('coverage', coverage)
