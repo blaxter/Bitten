@@ -145,22 +145,24 @@ def unit(ctxt, dir_=None):
     except xmlio.ParseError, e:
         log.warning('Error parsing ci:unit results file (%s)', e)
 
-def rcov(ctxt, file_=None):
+def rcov(ctxt, dir_=None):
     """Extract data from a ``rake test:xxx:rcov`` run, which generates html
     output with the coverage information
 
     :param ctxt: the build context
     :type ctxt: `Context`
-    :param file_: html file with the output of rcov
+    :param dir_: directory with html files with the output of rcov
     """
-    assert file_, 'Missing required attribute "file"'
+    assert dir_, 'Missing required attribute "dir"'
 
     xpath_for = { 'each_file'  : '/html/body/table/tbody/tr',
                   'filename'   : './td[1]/a/text()',
                   'total_lines': './td[2]/tt/text()',
-                  'percentage' : './td[5]/table/tr/td/tt/text()'}
+                  'percentage' : './td[5]/table/tr/td/tt/text()',
+                  'file_lines' : './td[1]/a' }
 
     try:
+        file_ = os.path.join(dir_, 'index.html')
         tree = etree.parse(ctxt.resolve(file_), etree.HTMLParser())
         coverage = xmlio.Fragment()
         for item in tree.xpath(xpath_for['each_file'])[1:]:
@@ -176,9 +178,36 @@ def rcov(ctxt, file_=None):
                 percentage = percentage,
                 lines      = total_lines
             )
+
+            file_lines = item.xpath(xpath_for['file_lines'])[0].get('href')
+            filepath_lines = ctxt.resolve( os.path.join( dir_, file_lines ) )
+            line_hits = rcov_lines(filepath_lines)
+            module.append( xmlio.Element('line_hits')[line_hits] )
+
             coverage.append(module)
 
         ctxt.report('coverage', coverage)
     except IOError, e:
         log.warning('Error opening rcov summary file (%s)', e)
+
+def rcov_lines(path):
+    """Extract data of executed lines from a rcov file
+
+    :params path: html file path with the info about lines executed
+    """
+    assert os.path.exists(path), "Missing file " + path
+    try:
+        tree = etree.parse(path, etree.HTMLParser())
+        hits = []
+        for line_e in tree.xpath('/html/body/pre[2]/span'):
+            state = line_e.get('class')
+            if state.startswith('marked'):
+                hits.append('1')
+            elif state.startswith('uncovered'):
+                hits.append('0')
+            else:
+                hits.append('-')
+        return ' '.join(hits)
+    except IOError, e:
+        log.warning('Error opening rcov details file (%s)', e)
 
